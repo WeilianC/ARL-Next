@@ -357,23 +357,75 @@ class WebSiteFetch(object):
     CATCH_ALL_CONTROL_TIMEOUT = (3.1, 6.1)
     CATCH_ALL_CONTROL_MAX_ENTRY = 30
     CATCH_ALL_CONTROL_CONCURRENCY = 6
+    # 与 asset_site_monitor.compare_simhash 保持一致：距离 <= 3 视为同一页面
+    CATCH_ALL_CONTROL_SIMHASH_DISTANCE = 3
 
     @staticmethod
     def _wildcard_parent(hostname):
-        """取站点的直接父域作为随机标签挂载点；顶级域不再上溯"""
+        """
+        随机标签的挂载点
+
+        - 纯 IP 访问直接跳过，避免拼出 wfxxxx.168.1.1 这种无效 Host
+        - 优先用站点的直接父域；父域落在公共后缀里（如 co.uk / edu.cn）时回退到可注册主域
+        """
         if not hostname:
             return None
+
         hostname = hostname.strip().strip(".").lower()
-        if hostname.count(".") < 2:
+        if utils.is_vaild_ip_target(hostname):
             return None
-        return hostname.split(".", 1)[1]
+
+        fld = utils.get_fld(hostname) or ""
+        parent = hostname.split(".", 1)[1] if "." in hostname else ""
+        if parent and fld and parent.endswith(fld):
+            return parent
+
+        return fld or None
+
+    @staticmethod
+    def _simhash_within_distance(simhash_a, simhash_b, max_distance=CATCH_ALL_CONTROL_SIMHASH_DISTANCE):
+        """容忍默认后端页面里的时间戳 / 随机 token：按汉明距离判定，而不是字符串全等"""
+        if simhash_a == simhash_b:
+            return True
+
+        try:
+            import simhash
+            distance = simhash.Simhash(int(simhash_a)).distance(simhash.Simhash(int(simhash_b)))
+        except Exception:
+            return False
+
+        return distance <= max_distance
+
+    def _probe_catch_all_reference(self, url, host_header):
+        """请求一次，取回用于比对的响应快照；失败返回 None"""
+        try:
+            conn = utils.http_req(url, headers={"Host": host_header},
+                                  timeout=self.CATCH_ALL_CONTROL_TIMEOUT,
+                                  allow_redirects=True)
+        except Exception:
+            return None
+
+        content = conn.content or b""
+        try:
+            import simhash
+            body_simhash = str(simhash.Simhash(conn.text).value)
+        except Exception:
+            body_simhash = ""
+
+        return {
+            "status": conn.status_code,
+            "title": utils.get_title(content),
+            "body_length": len(content),
+            "simhash": body_simhash,
+        }
 
     def _fetch_catch_all_reference(self, ip, scheme, port, hostname):
         """
         用随机标签取该入口的参照响应，返回 dict 或 None
 
         1) 直连入口 IP + 随机标签 Host：不依赖 DNS 上是否真的存在泛解析
-        2) 兜底用随机域名直连：DNS 存在泛解析时同样能拿到同一个默认后端
+        2) 兜底再试随机域名直连，且仅在 DNS 上确认存在泛解析时才发起，
+           避免没有泛解析时白等一次递归查询
         """
         parent = self._wildcard_parent(hostname)
         if not parent:
@@ -383,36 +435,16 @@ class WebSiteFetch(object):
         ip_netloc = "[{}]".format(ip) if ":" in ip else ip
         netloc = "{}:{}".format(ip_netloc, port)
 
-        candidates = [
-            ("{}://{}/".format(scheme, netloc), random_host),
-            ("{}://{}/".format(scheme, random_host), random_host),
-        ]
+        snapshot = self._probe_catch_all_reference("{}://{}/".format(scheme, netloc), random_host)
+        if snapshot:
+            return snapshot
 
-        for url, host_header in candidates:
-            try:
-                conn = utils.http_req(url, headers={"Host": host_header},
-                                      timeout=self.CATCH_ALL_CONTROL_TIMEOUT,
-                                      allow_redirects=True)
-                content = conn.content or b""
-                try:
-                    import simhash
-                    body_simhash = str(simhash.Simhash(conn.text).value)
-                except Exception:
-                    body_simhash = ""
-
-                return {
-                    "status": conn.status_code,
-                    "title": utils.get_title(content),
-                    "body_length": len(content),
-                    "simhash": body_simhash,
-                }
-            except Exception:
-                continue
+        if utils.get_ip(random_host, log_flag=False):
+            return self._probe_catch_all_reference("{}://{}/".format(scheme, random_host), random_host)
 
         return None
 
-    @staticmethod
-    def _is_catch_all_by_control(item, reference):
+    def _is_catch_all_by_control(self, item, reference):
         """站点响应与随机标签的参照响应一致 => 命中的是默认后端"""
         if item.get("status") != reference.get("status"):
             return False
@@ -420,7 +452,8 @@ class WebSiteFetch(object):
         item_simhash = item.get("simhash") or ""
         ref_simhash = reference.get("simhash") or ""
         if item_simhash and ref_simhash:
-            return item_simhash == ref_simhash
+            # 用汉明距离容差，避免页面里的时间戳 / 随机 token 把同一个页面判成两个
+            return self._simhash_within_distance(item_simhash, ref_simhash)
 
         # 正文指纹缺失时退回 title + 长度比对
         if (item.get("title") or "") != (reference.get("title") or ""):
@@ -480,17 +513,29 @@ class WebSiteFetch(object):
             return self._fetch_catch_all_reference(ip=ip, scheme=scheme,
                                                    port=port, hostname=entry["hostname"])
 
+        # 注意：这里不能用 services.baseThread.thread_map —— 它的 _run 会把整数 0 当成空目标跳过
+        # （baseThread.py 里的 `if not target: continue`），第 0 个入口永远拿不到参照响应。
+        # utils.ContextAwareThreadPoolExecutor 是仓库自带的，同样会透传 arl_task_id 上下文。
+        reference_map = {}
         try:
-            from app.services.baseThread import thread_map
-            reference_map = thread_map(_probe, list(range(len(entries))),
-                                       concurrency=self.CATCH_ALL_CONTROL_CONCURRENCY) or {}
+            from concurrent.futures import as_completed
+            with utils.ContextAwareThreadPoolExecutor(max_workers=self.CATCH_ALL_CONTROL_CONCURRENCY) as executor:
+                future_map = {executor.submit(_probe, idx): idx for idx in range(len(entries))}
+                for future in as_completed(future_map):
+                    idx = future_map[future]
+                    try:
+                        snapshot = future.result()
+                    except Exception:
+                        continue
+                    if snapshot:
+                        reference_map[idx] = snapshot
         except Exception as e:
             logger.warning("catch_all control probe error: {}".format(e))
             return
 
         marked = 0
         for idx, ((ip, scheme, port), entry) in enumerate(entries):
-            reference = reference_map.get(str(idx))
+            reference = reference_map.get(idx)
             if not reference:
                 continue
 
