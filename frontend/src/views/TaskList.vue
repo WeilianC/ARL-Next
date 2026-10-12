@@ -18,9 +18,9 @@
             >
               <bank-outlined class="capsule-icon" />
               <span>企业测绘任务</span>
-              <span class="capsule-count" v-if="enterpriseRunningCount > 0">
+              <span class="capsule-count" v-if="enterpriseMetricCounts.running > 0">
                 <span class="pulse-dot"></span>
-                {{ enterpriseRunningCount }} 运行中
+                {{ enterpriseMetricCounts.running }} 运行中
               </span>
             </button>
             <button
@@ -1132,12 +1132,9 @@ const enterpriseMetricCounts = reactive({
   abnormal: 0
 });
 
-const enterpriseRunningCount = ref(0);
 const taskListClient = createTaskListClient(request);
 let taskRequestVersion = 0;
 let enterpriseRequestVersion = 0;
-let taskStatisticsReady = false;
-let enterpriseStatisticsReady = false;
 
 const currentTotalCount = computed(() => {
   return activeMainTab.value === 'enterprise' ? enterpriseMetricCounts.total : taskMetricCounts.total;
@@ -1178,35 +1175,6 @@ const toggleStatusFilter = (targetStatus) => {
   }
 };
 
-// 拉取资产侦查任务 4 维指标计数 (单次轻量聚合独立接口)
-const fetchTaskMetricCounts = async () => {
-  try {
-    const res = await request.get('/task/statistics');
-    const data = res.data || res;
-    if (res.code === 200 && data) {
-      if (applyTaskStatistics(taskMetricCounts, data)) taskStatisticsReady = true;
-    }
-  } catch (e) {
-    console.error('获取资产侦查指标失败:', e);
-  }
-};
-
-// 拉取企业测绘任务 4 维指标计数 (单次轻量聚合独立接口)
-const fetchEnterpriseMetricCounts = async () => {
-  try {
-    const res = await request.get('/icp/task/statistics');
-    const data = res.data || res;
-    if (res.code === 200 && data) {
-      if (applyTaskStatistics(enterpriseMetricCounts, data)) {
-        enterpriseStatisticsReady = true;
-        enterpriseRunningCount.value = enterpriseMetricCounts.running;
-      }
-    }
-  } catch (e) {
-    console.error('获取企业测绘指标失败:', e);
-  }
-};
-
 // ==========================================
 // 🔄 自适应静默轮询机制 (Smart Polling)
 // ==========================================
@@ -1224,13 +1192,11 @@ const startSmartPolling = () => {
   if (!autoRefreshEnabled.value) return;
 
   pollingTimer = setInterval(async () => {
-    // 仅在有进行中任务或激活状态时静默更新
-    if (activeMainTab.value === 'enterprise') {
-      if (enterpriseMetricCounts.running > 0) {
+    // 仅在有进行中任务时静默更新当前激活 Tab
+    if (currentRunningCount.value > 0) {
+      if (activeMainTab.value === 'enterprise') {
         await fetchEnterpriseTasks(enterprisePagination.current, enterprisePagination.pageSize, true);
-      }
-    } else {
-      if (taskMetricCounts.running > 0) {
+      } else {
         await fetchTasks(pagination.current, pagination.pageSize, true);
       }
     }
@@ -1315,10 +1281,7 @@ const fetchEnterpriseTasks = async (page = 1, size = 10, silent = false, include
     if (requestVersion !== enterpriseRequestVersion) return;
 
     if (res.code === 200) {
-      if (applyTaskStatistics(enterpriseMetricCounts, res.statistics)) {
-        enterpriseStatisticsReady = true;
-        enterpriseRunningCount.value = enterpriseMetricCounts.running;
-      }
+      applyTaskStatistics(enterpriseMetricCounts, res.statistics);
       enterpriseTaskList.value = res.items || [];
       (res.items || []).forEach(item => {
         if (item && item._id) {
@@ -1820,7 +1783,7 @@ const fetchTasks = async (page = 1, size = 10, silent = false, includeStatistics
     if (requestVersion !== taskRequestVersion) return;
 
     if (res.code === 200) {
-      if (applyTaskStatistics(taskMetricCounts, res.statistics)) taskStatisticsReady = true;
+      applyTaskStatistics(taskMetricCounts, res.statistics);
       taskList.value = res.items || [];
       pagination.total = res.total || 0;
       pagination.current = page;
@@ -2416,10 +2379,8 @@ onMounted(async () => {
 
   if (activeMainTab.value === 'enterprise') {
     fetchEnterpriseTasks(enterprisePagination.current, enterprisePagination.pageSize);
-    fetchTaskMetricCounts();
   } else {
     fetchTasks(pagination.current, pagination.pageSize);
-    fetchEnterpriseMetricCounts();
   }
 
   startSmartPolling();
