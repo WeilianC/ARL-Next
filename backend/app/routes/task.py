@@ -104,6 +104,7 @@ add_task_fields = ns.model('AddTask', { # 创建添加任务命名空间。
     "dns_query_plugin": fields.Boolean(example=False, default=False),
     "skip_scan_cdn_ip": fields.Boolean(example=False, default=False),
     "nuclei_scan": fields.Boolean(description="nuclei 扫描", example=False, default=False),
+    "nuclei_config": fields.Raw(description="nuclei 细粒度配置", example={}),
     "findvhost": fields.Boolean(example=False, default=False),
     "web_info_hunter": fields.Boolean(example=False, default=False, description="WEB JS 中的信息收集"),
     "npoc_service_detection": fields.Boolean(example=False, default=False, description="服务(python)识别"),
@@ -162,9 +163,11 @@ class ARLTask(ARLResource): # 继承我们在阶段一拆解过的“大基类�
                     except Exception as e:
                         logger.error(f"Failed to compute or auto-heal task statistic for {task_id}: {e}")
 
-        # 4. 直接把查到的标准格式数据返回给前端
+        # 4. 可选附带全局状态统计
         if include_statistics:
             attach_task_statistics(data, utils.conn_db('task'), logger, include_stage_statuses=True)
+
+        # 5. 直接把查到的标准格式数据返回给前端
         return data
 
 
@@ -210,18 +213,6 @@ class ARLTask(ARLResource): # 继承我们在阶段一拆解过的“大基类�
         return ret
 
         # return utils.build_ret(ErrorMsg.Success, {"items": task_data_list})
-
-@ns.route('/statistics')
-class TaskStatistics(ARLResource):
-    @auth
-    def get(self):
-        """仅返回全局状态数量，运行中包含扫描阶段状态。"""
-        try:
-            return utils.build_ret(ErrorMsg.Success, get_task_statistics(utils.conn_db('task'), include_stage_statuses=True))
-        except Exception:
-            logger.exception('Failed to aggregate task status statistics')
-            return utils.build_ret(ErrorMsg.Error, {'error': '获取任务统计失败'})
-
 
 # 1. 印制表格：批量停止任务时，必须传一个包含多个任务ID的列表
 batch_stop_fields = ns.model('BatchStop',  {
@@ -700,6 +691,29 @@ class TaskRestart(ARLResource):
             "task_id": task_id_list,
             "new_task_id": new_task_id_list
         })
+
+
+# ==========================================
+# 接口 D：任务全局 4 维指标统计 (GET /statistics 或 /overview_count)
+# ==========================================
+@ns.route('/statistics')
+@ns.route('/statistics/')
+@ns.route('/overview_count')
+@ns.route('/overview_count/')
+class TaskStatistics(ARLResource):
+    @auth
+    def get(self):
+        """仅返回全局状态数量，运行中包含扫描阶段状态。"""
+        try:
+            return utils.build_ret(ErrorMsg.Success, get_task_statistics(utils.conn_db('task'), include_stage_statuses=True))
+        except Exception:
+            logger.exception('Failed to aggregate task status statistics')
+            return utils.build_ret(ErrorMsg.Error, {'error': '获取任务统计失败'})
+
+
+# 向下兼容别名引用
+TaskOverviewCount = TaskStatistics
+
 
 
 

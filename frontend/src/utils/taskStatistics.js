@@ -1,9 +1,16 @@
 export function applyTaskStatistics(metrics, statistics) {
-  if (!statistics || !['total', 'active', 'done', 'abnormal'].every(
-    key => Number.isInteger(statistics[key]) && statistics[key] >= 0
-  )) return false;
+  if (!statistics) return false;
+  const running = Number.isInteger(statistics.active) ? statistics.active : (Number.isInteger(statistics.running) ? statistics.running : null);
+  if (
+    !Number.isInteger(statistics.total) || statistics.total < 0 ||
+    running === null || running < 0 ||
+    !Number.isInteger(statistics.done) || statistics.done < 0 ||
+    !Number.isInteger(statistics.abnormal) || statistics.abnormal < 0
+  ) {
+    return false;
+  }
   metrics.total = statistics.total;
-  metrics.running = statistics.active;
+  metrics.running = running;
   metrics.done = statistics.done;
   metrics.abnormal = statistics.abnormal;
   return true;
@@ -12,7 +19,7 @@ export function applyTaskStatistics(metrics, statistics) {
 export function createTaskListClient(request) {
   const pending = new Map();
   return {
-    get(endpoint, params, includeStatistics = true) {
+    get(endpoint, params = {}, includeStatistics = true) {
       const query = includeStatistics ? { ...params, include_statistics: 1 } : { ...params };
       const key = JSON.stringify([endpoint, Object.keys(query).sort().map(name => [name, query[name]])]);
       if (pending.has(key)) return pending.get(key);

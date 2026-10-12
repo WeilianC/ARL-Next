@@ -18,9 +18,9 @@
             >
               <bank-outlined class="capsule-icon" />
               <span>企业测绘任务</span>
-              <span class="capsule-count" v-if="enterpriseRunningCount > 0">
+              <span class="capsule-count" v-if="enterpriseMetricCounts.running > 0">
                 <span class="pulse-dot"></span>
-                {{ enterpriseRunningCount }} 运行中
+                {{ enterpriseMetricCounts.running }} 运行中
               </span>
             </button>
             <button
@@ -1052,7 +1052,6 @@
 defineOptions({ name: 'TaskList' });
 
 import { ref, reactive, onMounted, computed, createVNode, watch, onActivated, onDeactivated, onUnmounted } from 'vue';
-import { applyTaskStatistics, createTaskListClient } from '../utils/taskStatistics';
 import { useSticky } from '../utils/useSticky';
 import { Modal, message, Checkbox } from 'ant-design-vue';
 import { useRouter, useRoute } from 'vue-router';
@@ -1065,6 +1064,7 @@ import {
 } from '@ant-design/icons-vue';
 import dayjs from 'dayjs';
 import request from '../utils/request';
+import { applyTaskStatistics, createTaskListClient } from '../utils/taskStatistics';
 import { useGlobalPageSize } from '../utils/useGlobalPageSize';
 import TycTaskModal from '../components/TycTaskModal.vue';
 import SyncToScopeModal from '../components/SyncToScopeModal.vue';
@@ -1140,7 +1140,7 @@ let taskStatisticsReady = false;
 let enterpriseStatisticsReady = false;
 
 const currentTotalCount = computed(() => {
-  return activeMainTab.value === 'enterprise' ? enterprisePagination.total : pagination.total;
+  return activeMainTab.value === 'enterprise' ? enterpriseMetricCounts.total : taskMetricCounts.total;
 });
 
 const currentRunningCount = computed(() => {
@@ -1284,6 +1284,7 @@ const fetchEnterpriseTasks = async (page = 1, size = 10, silent = false, include
 
     const res = await taskListClient.get('/icp/task', queryParams, includeStatistics);
     if (requestVersion !== enterpriseRequestVersion) return;
+
     if (res.code === 200) {
       if (applyTaskStatistics(enterpriseMetricCounts, res.statistics)) {
         enterpriseStatisticsReady = true;
@@ -1558,7 +1559,7 @@ const handleBatchRestartEnterprise = async () => {
       message.error({ content: res.message || '批量重启失败', key: 'batchRestart', duration: 3 });
     }
   } catch (error) {
-    message.error({ content: '批量重启失败', key: 'batchRestart', duration: 3 });
+    message.error({ content: '批量重启失败', key: 'batchRestart', duration: 2 });
   }
 };
 
@@ -2408,7 +2409,7 @@ onMounted(async () => {
 
 let firstActivation = true;
 onActivated(() => {
-  // KeepAlive 首次激活时 onMounted 已启动加载。
+  // KeepAlive 首次激活时 onMounted 已启动加载，消除并发双重触发
   if (firstActivation) {
     firstActivation = false;
     return;

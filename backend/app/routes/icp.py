@@ -117,6 +117,7 @@ class IcpTask(ARLResource):
 
         if include_statistics:
             attach_task_statistics(data, conn_db('icp_task'), logger)
+
         return data
 
     @auth
@@ -168,6 +169,9 @@ class IcpTask(ARLResource):
 
 
 @ns.route('/task/statistics')
+@ns.route('/task/statistics/')
+@ns.route('/task/overview_count')
+@ns.route('/task/overview_count/')
 class IcpTaskStatistics(ARLResource):
     @auth
     def get(self):
@@ -177,6 +181,10 @@ class IcpTaskStatistics(ARLResource):
         except Exception:
             logger.exception('Failed to aggregate enterprise task status statistics')
             return build_ret(ErrorMsg.Error, {'error': '获取企业查询统计失败'})
+
+
+# 向下兼容别名引用
+IcpTaskOverviewCount = IcpTaskStatistics
 
 
 @ns.route('/tyc_check')
