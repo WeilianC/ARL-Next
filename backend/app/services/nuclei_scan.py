@@ -243,6 +243,7 @@ class NucleiScan(object):
             logger.warning("not found nuclei")
             return []
 
+        self._check_json_flag()
         self.exec_nuclei()
         results = self.dump_result()
         self._delete_file()
